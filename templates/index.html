@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Facebook Ads Viewer</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<style>
+  :root {
+    --fb: #1877f2;
+    --fb-dark: #0c5fd1;
+    --bg: #f0f2f5;
+    --card-border: #dde0e6;
+    --text-muted: #65676b;
+    --green: #00a67e;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh;
+  }
+
+  /* ── HERO ─────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, #1877f2 0%, #0a4f9e 100%);
+    padding: 2.5rem 1rem 4rem;
+    color: white;
+  }
+  .hero h1 { font-weight: 800; font-size: 2rem; letter-spacing: -0.5px; }
+  .hero p   { opacity: .8; font-size: .95rem; }
+
+  /* ── SEARCH CARD ─────────────────────────── */
+  .search-card {
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.18);
+    padding: 1.5rem;
+    margin-top: -2rem;
+  }
+  #url-input {
+    border: 2px solid #e4e6ea;
+    border-radius: 10px 0 0 10px;
+    font-size: .95rem;
+    padding: .65rem 1rem;
+    transition: border-color .2s;
+  }
+  #url-input:focus { border-color: var(--fb); box-shadow: none; outline: none; }
+  .btn-fb {
+    background: var(--fb);
+    color: white;
+    border: none;
+    border-radius: 0 10px 10px 0;
+    padding: .65rem 1.4rem;
+    font-weight: 600;
+    font-size: .95rem;
+    transition: background .15s;
+  }
+  .btn-fb:hover  { background: var(--fb-dark); color: white; }
+  .btn-fb:active { background: #0a4f9e; color: white; }
+  .btn-fb:disabled { opacity: .6; }
+
+  /* ── LOADING ─────────────────────────────── */
+  #loading {
+    display: none;
+    text-align: center;
+    padding: 3.5rem 1rem;
+  }
+  .spinner-ring {
+    width: 56px; height: 56px;
+    border: 5px solid #e4e6ea;
+    border-top-color: var(--fb);
+    border-radius: 50%;
+    animation: spin .9s linear infinite;
+    margin: 0 auto 1rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── AD CARD ─────────────────────────────── */
+  .ad-card {
+    background: white;
+    border-radius: 14px;
+    border: 1px solid var(--card-border);
+    overflow: hidden;
+    transition: box-shadow .2s, transform .15s;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .ad-card:hover {
+    box-shadow: 0 6px 28px rgba(0,0,0,.12);
+    transform: translateY(-2px);
+  }
+
+  /* media */
+  .ad-media { position: relative; background: #000; overflow: hidden; }
+  .ad-media img,
+  .ad-media video {
+    width: 100%;
+    max-height: 260px;
+    object-fit: cover;
+    display: block;
+  }
+  .media-type-badge {
+    position: absolute;
+    top: 8px; left: 8px;
+    background: rgba(0,0,0,.55);
+    color: white;
+    font-size: .7rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-weight: 600;
+  }
+  .carousel-count {
+    position: absolute;
+    bottom: 8px; right: 8px;
+    background: rgba(0,0,0,.6);
+    color: white;
+    font-size: .72rem;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+
+  /* body */
+  .ad-body { padding: 1rem; display: flex; flex-direction: column; gap: .6rem; flex: 1; }
+
+  .page-name { font-weight: 700; font-size: .95rem; color: #1c1e21; }
+
+  /* pills */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    padding: .22rem .55rem;
+    border-radius: 20px;
+    font-size: .72rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .pill-gray   { background: #f0f2f5; color: var(--text-muted); }
+  .pill-green  { background: #e6f9f3; color: #087251; }
+  .pill-amber  { background: #fff3e0; color: #b35c00; }
+  .pill-blue   { background: #e8f1fd; color: var(--fb); }
+
+  /* ad copy */
+  .ad-copy {
+    font-size: .88rem;
+    color: #1c1e21;
+    line-height: 1.55;
+    white-space: pre-line;
+    overflow: hidden;
+    max-height: 5.5em;
+    position: relative;
+    transition: max-height .3s ease;
+  }
+  .ad-copy.expanded { max-height: 1000px; }
+  .toggle-copy {
+    background: none;
+    border: none;
+    color: var(--fb);
+    font-size: .8rem;
+    font-weight: 600;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  /* headline + desc */
+  .ad-title { font-weight: 700; font-size: .9rem; color: #1c1e21; }
+  .ad-desc  { font-size: .82rem; color: var(--text-muted); }
+  .ad-link  { font-size: .78rem; color: var(--fb); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+  .ad-link:hover { text-decoration: underline; }
+
+  /* CTA button mock */
+  .cta-mock {
+    display: inline-block;
+    padding: .35rem .9rem;
+    background: var(--fb);
+    color: white;
+    border-radius: 6px;
+    font-size: .82rem;
+    font-weight: 700;
+  }
+
+  /* stats row */
+  .stats-row {
+    display: flex;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+
+  /* download area */
+  .dl-area {
+    padding: .75rem 1rem;
+    border-top: 1px solid var(--card-border);
+    background: #f9fafb;
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem;
+    align-items: center;
+  }
+  .btn-dl {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .35rem .8rem;
+    border-radius: 8px;
+    font-size: .8rem;
+    font-weight: 600;
+    border: 1.5px solid;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-dl-img  { border-color: #1877f2; color: #1877f2; }
+  .btn-dl-img:hover  { background: #e8f1fd; }
+  .btn-dl-vid  { border-color: #e03131; color: #e03131; }
+  .btn-dl-vid:hover  { background: #ffeaea; }
+
+  /* empty / error */
+  .state-box {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: var(--text-muted);
+  }
+  .state-box .icon { font-size: 3rem; margin-bottom: 1rem; }
+
+  /* divider */
+  .info-divider { border-top: 1px solid var(--card-border); margin: .25rem 0; }
+
+  /* ── MODE BUTTONS ────────────────────────── */
+  .mode-btn {
+    flex: 1;
+    padding: .4rem .6rem;
+    border-radius: 8px;
+    border: 1.5px solid #dde0e6;
+    background: white;
+    font-size: .8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  .mode-btn.active {
+    border-color: var(--fb);
+    color: var(--fb);
+    background: #eef4fe;
+  }
+  .mode-btn:hover:not(.active) { background: #f5f6f7; }
+
+  /* ── MODE PANEL ───────────────────────────── */
+  .mode-panel { min-height: 2rem; }
+
+  /* ID chip */
+  .id-chip {
+    font-family: monospace;
+    font-size: .72rem;
+    background: #f0f2f5;
+    padding: .18rem .5rem;
+    border-radius: 4px;
+    color: var(--text-muted);
+    user-select: all;
+  }
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="container">
+    <div class="row justify-content-center">
+      <div class="col-lg-8 text-center">
+        <h1><i class="bi bi-facebook me-2"></i>Facebook Ads Viewer</h1>
+        <p>Colle le lien d'une bibliothèque d'annonces — toutes les pubs apparaissent instantanément</p>
+
+        <div class="search-card">
+          <!-- URL row -->
+          <div class="d-flex">
+            <input type="url" id="url-input"
+              placeholder="https://www.facebook.com/ads/library/?active_status=active&view_all_page_id=..."
+              class="form-control flex-grow-1">
+            <button class="btn-fb" id="scrape-btn" onclick="scrapeAds()">
+              <i class="bi bi-search me-1"></i>Analyser
+            </button>
+          </div>
+
+          <!-- Mode selector -->
+          <div class="mt-3 pt-3" style="border-top:1px solid #eee">
+            <div class="d-flex gap-2 mb-3" role="group">
+              <button type="button" class="mode-btn active" id="btn-mode-scraping" onclick="setMode('scraping')">
+                <i class="bi bi-robot me-1"></i>Scraping <span class="badge bg-secondary ms-1">~30 ads</span>
+              </button>
+              <button type="button" class="mode-btn" id="btn-mode-cookies" onclick="setMode('cookies')">
+                <i class="bi bi-cookie me-1"></i>Cookies <span class="badge bg-success ms-1">Toutes les ads</span>
+              </button>
+              <button type="button" class="mode-btn" id="btn-mode-api" onclick="setMode('api')">
+                <i class="bi bi-key me-1"></i>API Token <span class="badge bg-success ms-1">Toutes les ads</span>
+              </button>
+            </div>
+
+            <!-- SCRAPING panel -->
+            <div id="panel-scraping" class="mode-panel">
+              <div class="text-muted small">
+                <i class="bi bi-info-circle me-1"></i>
+                Aucun setup. Récupère les ~30 ads les plus diffusées automatiquement.
+              </div>
+            </div>
+
+            <!-- COOKIES panel -->
+            <div id="panel-cookies" class="mode-panel d-none">
+              <div class="p-3 rounded-3 mb-2 text-start" style="background:#f0fff4;border:1px solid #b7ebc8;font-size:.82rem">
+                <strong>3 étapes (2 minutes, gratuit) :</strong>
+                <ol class="mb-0 mt-1 ps-3">
+                  <li>Installe <a href="https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm" target="_blank" style="color:#087251">Cookie-Editor</a> sur Chrome</li>
+                  <li>Va sur <strong>facebook.com</strong> (connecté à ton compte)</li>
+                  <li>Clique l'icône Cookie-Editor → <strong>Export → Export as JSON</strong> → Copie</li>
+                </ol>
+              </div>
+              <textarea id="cookies-input" rows="3"
+                placeholder='Colle ici le JSON de tes cookies Facebook (commence par [{"name":"...}])'
+                class="form-control form-control-sm"
+                style="border:1.5px solid #b7ebc8;border-radius:8px;font-size:.8rem;font-family:monospace;resize:vertical"></textarea>
+              <div class="text-muted small mt-1">
+                <i class="bi bi-shield-check me-1 text-success"></i>
+                Les cookies restent sur ton ordi — ils ne sont jamais envoyés ailleurs.
+              </div>
+            </div>
+
+            <!-- API TOKEN panel -->
+            <div id="panel-api" class="mode-panel d-none">
+              <div class="p-3 rounded-3 mb-2 text-start" style="background:#f0f7ff;border:1px solid #c8dff8;font-size:.82rem">
+                <strong>3 étapes :</strong>
+                <ol class="mb-0 mt-1 ps-3">
+                  <li>Va sur <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color:var(--fb)">developers.facebook.com/tools/explorer</a></li>
+                  <li>Clique <strong>"Generate Access Token"</strong></li>
+                  <li>Copie et colle ci-dessous</li>
+                </ol>
+                <div class="mt-1 text-muted">Expire en ~1h. Nécessite un compte développeur Facebook (gratuit).</div>
+              </div>
+              <input type="password" id="token-input"
+                placeholder="EAAxxxxxxx..."
+                class="form-control form-control-sm"
+                style="border:1.5px solid #c8dff8;border-radius:8px;font-size:.85rem">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="container py-4">
+
+  <!-- loading -->
+  <div id="loading">
+    <div class="spinner-ring"></div>
+    <p class="fw-semibold mb-1" style="color:#1c1e21">Analyse en cours…</p>
+    <p class="text-muted small">Un vrai navigateur visite la page — ça prend 20 à 40 secondes, patience ☕</p>
+  </div>
+
+  <!-- error -->
+  <div id="error-box" class="alert alert-danger d-none" role="alert"></div>
+
+  <!-- results header -->
+  <div id="results-header" class="d-none mb-3">
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <span class="fw-bold fs-5" id="results-count" style="color:var(--fb)">0</span>
+      <span class="text-muted">publicité(s) chargée(s)</span>
+      <span id="source-badge"></span>
+    </div>
+    <div class="small text-muted" id="results-note"></div>
+  </div>
+
+  <!-- empty state -->
+  <div id="empty-state" class="state-box d-none">
+    <div class="icon">🔍</div>
+    <h5>Aucune publicité trouvée</h5>
+    <p class="text-muted small">Vérifie que l'URL contient <code>view_all_page_id=</code> ou que la page a des pubs actives.</p>
+  </div>
+
+  <!-- cards -->
+  <div id="ads-container" class="row g-3"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ──────────────────────────────────────────────
+// helpers
+// ──────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function platformIcon(p) {
+  const m = {facebook:'facebook',instagram:'instagram',messenger:'chat-dots-fill',
+              audience_network:'grid-3x3-gap-fill',whatsapp:'whatsapp'};
+  return m[(p||'').toLowerCase()] || 'globe';
+}
+function platformLabel(p) {
+  const m = {facebook:'Facebook',instagram:'Instagram',messenger:'Messenger',
+              audience_network:'Audience Network',whatsapp:'WhatsApp'};
+  return m[(p||'').toLowerCase()] || p;
+}
+
+// ──────────────────────────────────────────────
+// mode switcher
+// ──────────────────────────────────────────────
+let currentMode = 'scraping';
+
+function setMode(mode) {
+  currentMode = mode;
+  ['scraping','cookies','api'].forEach(m => {
+    document.getElementById('btn-mode-' + m).classList.toggle('active', m === mode);
+    document.getElementById('panel-' + m).classList.toggle('d-none', m !== mode);
+  });
+}
+
+// ──────────────────────────────────────────────
+// scrape
+// ──────────────────────────────────────────────
+async function scrapeAds() {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) { showError('Colle d\'abord un lien Facebook Ad Library.'); return; }
+
+  let endpoint, payload, isFullMode;
+
+  if (currentMode === 'cookies') {
+    const cookies = document.getElementById('cookies-input').value.trim();
+    if (!cookies) { showError('Colle tes cookies Facebook dans le champ prévu.'); return; }
+    endpoint = '/api/scrape-cookies';
+    payload  = {url, cookies};
+    isFullMode = true;
+  } else if (currentMode === 'api') {
+    const token = document.getElementById('token-input').value.trim();
+    if (!token) { showError('Entre ton token Facebook API.'); return; }
+    endpoint = '/api/scrape-official';
+    payload  = {url, token};
+    isFullMode = true;
+  } else {
+    endpoint = '/api/scrape';
+    payload  = {url};
+    isFullMode = false;
+  }
+
+  setLoading(true, isFullMode);
+  clearResults();
+
+  try {
+    const res  = await fetch(endpoint, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) { showError(data.error || 'Erreur inconnue'); return; }
+    renderAds(data.ads || [], isFullMode, currentMode);
+  } catch(e) {
+    showError('Erreur réseau : ' + e.message);
+  } finally {
+    setLoading(false, false);
+  }
+}
+
+// ──────────────────────────────────────────────
+// UI state helpers
+// ──────────────────────────────────────────────
+function setLoading(on, fullMode) {
+  const el = document.getElementById('loading');
+  el.style.display = on ? 'block' : 'none';
+  if (on) {
+    const msgs = {
+      api:      ['Appel à l\'API Facebook…',       'L\'API officielle charge <strong>toutes</strong> les ads ⚡'],
+      cookies:  ['Navigation avec ton compte…',     'On scroll toute la page en ton nom — peut prendre 1-2 min 🔄'],
+      scraping: ['Analyse en cours…',               'Un vrai navigateur visite la page — ~30 secondes ☕'],
+    };
+    const [title, sub] = msgs[currentMode] || msgs.scraping;
+    el.querySelector('p.fw-semibold').textContent = title;
+    el.querySelector('p.text-muted').innerHTML    = sub;
+  }
+  document.getElementById('scrape-btn').disabled = on;
+}
+function clearResults() {
+  document.getElementById('ads-container').innerHTML = '';
+  document.getElementById('results-header').classList.add('d-none');
+  document.getElementById('error-box').classList.add('d-none');
+  document.getElementById('empty-state').classList.add('d-none');
+}
+function showError(msg) {
+  const box = document.getElementById('error-box');
+  box.textContent = msg;
+  box.classList.remove('d-none');
+}
+
+// ──────────────────────────────────────────────
+// render
+// ──────────────────────────────────────────────
+function renderAds(ads, fullMode, mode) {
+  const container = document.getElementById('ads-container');
+  if (ads.length === 0) {
+    document.getElementById('empty-state').classList.remove('d-none');
+    return;
+  }
+  document.getElementById('results-count').textContent = ads.length;
+  document.getElementById('results-header').classList.remove('d-none');
+
+  const badge = document.getElementById('source-badge');
+  const note  = document.getElementById('results-note');
+  const badgeMap = {
+    api:      ['bg-success','API officielle'],
+    cookies:  ['bg-success','Cookies (connecté)'],
+    scraping: ['bg-secondary','Scraping'],
+  };
+  const [bc, bl] = badgeMap[mode] || badgeMap.scraping;
+  badge.innerHTML = `<span class="badge ${bc} ms-1">${bl}</span>`;
+  if (fullMode) {
+    note.innerHTML = '<i class="bi bi-check-circle-fill text-success me-1"></i>Chargement complet — toutes les ads actives.';
+  } else {
+    note.innerHTML = '<i class="bi bi-info-circle me-1"></i>~30 ads max en mode scraping. Passe en mode <strong>Cookies</strong> pour tout voir.';
+  }
+
+  container.innerHTML = ads.map((ad, i) => adCard(ad, i)).join('');
+}
+
+function adCard(ad, idx) {
+  const mediaHtml = buildMedia(ad, idx);
+  const platforms  = (ad.platforms||[]).map(p =>
+    `<span class="pill pill-blue"><i class="bi bi-${platformIcon(p)}"></i> ${platformLabel(p)}</span>`
+  ).join('');
+
+  const daysHtml = ad.days_running != null
+    ? `<span class="pill pill-amber"><i class="bi bi-clock"></i> ${ad.days_running} jour${ad.days_running!==1?'s':''}</span>`
+    : '';
+
+  const statusHtml = `<span class="pill pill-green"><i class="bi bi-circle-fill" style="font-size:.45rem"></i> Actif</span>`;
+
+  const copyHtml = ad.body
+    ? `<div class="ad-copy" id="copy-${idx}">${esc(ad.body)}</div>
+       ${ad.body.length > 180
+         ? `<button class="toggle-copy mt-1" onclick="toggleCopy(${idx}, this)">Voir plus ▾</button>`
+         : ''}`
+    : '';
+
+  const ctaHtml = ad.cta_label
+    ? `<div><span class="cta-mock"><i class="bi bi-cursor-fill me-1"></i>${esc(ad.cta_label)}</span></div>`
+    : '';
+
+  const dlHtml = buildDownloads(ad);
+
+  return `
+  <div class="col-sm-6 col-xl-4">
+    <div class="ad-card">
+
+      ${mediaHtml}
+
+      <div class="ad-body">
+        <!-- page + status -->
+        <div class="d-flex align-items-start justify-content-between gap-2">
+          <span class="page-name">${esc(ad.page_name||'Page inconnue')}</span>
+          ${statusHtml}
+        </div>
+
+        <!-- meta row 1: id + dates -->
+        <div class="d-flex flex-wrap gap-1 align-items-center">
+          ${ad.id ? `<span class="id-chip" title="Library ID">#${esc(ad.id)}</span>` : ''}
+          ${ad.start_date ? `<span class="pill pill-gray"><i class="bi bi-calendar3"></i> ${esc(ad.start_date)}</span>` : ''}
+          ${daysHtml}
+          ${ad.collation_count > 1 ? `<span class="pill pill-gray"><i class="bi bi-files"></i> ${ad.collation_count} créatifs</span>` : ''}
+        </div>
+
+        <!-- platforms + format -->
+        <div class="d-flex flex-wrap gap-1">
+          ${platforms}
+          ${ad.display_format ? `<span class="pill pill-gray"><i class="bi bi-${ad.display_format==='VIDEO'?'play-circle':'image'}"></i> ${esc(ad.display_format)}</span>` : ''}
+        </div>
+
+        <!-- copy -->
+        ${copyHtml}
+
+        <!-- title + desc + link -->
+        ${ad.title ? `<div class="ad-title">${esc(ad.title)}</div>` : ''}
+        ${ad.link_description ? `<div class="ad-desc">${esc(ad.link_description)}</div>` : ''}
+        ${ad.link_url
+          ? `<a href="${esc(ad.link_url)}" class="ad-link" target="_blank" rel="noopener">
+               <i class="bi bi-box-arrow-up-right me-1"></i>${esc(ad.link_url)}
+             </a>`
+          : ''}
+
+        <!-- CTA mock -->
+        ${ctaHtml}
+
+        <!-- API-only: impressions + spend + view ad -->
+        ${(ad.impressions_str || ad.spend_str) ? `
+        <div class="d-flex flex-wrap gap-1 mt-1">
+          ${ad.impressions_str ? `<span class="pill pill-gray"><i class="bi bi-eye"></i> ${esc(ad.impressions_str)} impressions</span>` : ''}
+          ${ad.spend_str ? `<span class="pill pill-gray"><i class="bi bi-cash"></i> ${esc(ad.spend_str)}</span>` : ''}
+        </div>` : ''}
+
+        ${ad.snapshot_url ? `
+        <a href="${esc(ad.snapshot_url)}" target="_blank" rel="noopener" class="btn-dl btn-dl-img mt-1" style="width:fit-content">
+          <i class="bi bi-eye"></i> Voir la pub complète
+        </a>` : ''}
+
+        <div style="flex:1"></div>
+      </div>
+
+      <!-- downloads -->
+      ${dlHtml}
+    </div>
+  </div>`;
+}
+
+// ── media ──────────────────────────────────────
+function buildMedia(ad, idx) {
+  const hasVid = ad.videos && ad.videos.length > 0;
+  const hasImg = ad.images && ad.images.length > 0;
+  if (!hasVid && !hasImg) return '';
+
+  let inner = '';
+  let badge = '';
+
+  if (hasVid) {
+    inner = `<video controls preload="metadata" style="width:100%;max-height:260px;background:#000">
+               <source src="${esc(ad.videos[0])}">
+             </video>`;
+    badge = '<span class="media-type-badge"><i class="bi bi-play-fill"></i> Vidéo</span>';
+  } else {
+    inner = `<img src="${esc(ad.images[0])}" alt="pub"
+               style="width:100%;max-height:260px;object-fit:cover"
+               onerror="this.closest('.ad-media').remove()">`;
+    badge = '<span class="media-type-badge"><i class="bi bi-image"></i> Image</span>';
+  }
+
+  const extra = (ad.images.length + ad.videos.length) > 1
+    ? `<span class="carousel-count">${ad.images.length + ad.videos.length} médias</span>`
+    : '';
+
+  return `<div class="ad-media">${inner}${badge}${extra}</div>`;
+}
+
+// ── downloads ──────────────────────────────────
+function buildDownloads(ad) {
+  const btns = [];
+  (ad.images||[]).forEach((url, i) => {
+    const fn = `ad_${ad.id||'x'}_image${ad.images.length>1?'_'+(i+1):''}.jpg`;
+    const dl = `/api/download?url=${encodeURIComponent(url)}&filename=${fn}`;
+    btns.push(`<a href="${dl}" class="btn-dl btn-dl-img" download="${fn}">
+      <i class="bi bi-image"></i>${ad.images.length>1?'Photo '+(i+1):'Photo'}
+    </a>`);
+  });
+  (ad.videos||[]).forEach((url, i) => {
+    const fn = `ad_${ad.id||'x'}_video${ad.videos.length>1?'_'+(i+1):''}.mp4`;
+    const dl = `/api/download?url=${encodeURIComponent(url)}&filename=${fn}`;
+    btns.push(`<a href="${dl}" class="btn-dl btn-dl-vid" download="${fn}">
+      <i class="bi bi-camera-video"></i>${ad.videos.length>1?'Vidéo '+(i+1):'Vidéo'}
+    </a>`);
+  });
+  if (btns.length === 0) return '';
+  return `<div class="dl-area">
+    <span class="text-muted small me-1" style="font-size:.75rem;font-weight:600">TÉLÉCHARGER :</span>
+    ${btns.join('')}
+  </div>`;
+}
+
+// ── toggle copy ────────────────────────────────
+function toggleCopy(idx, btn) {
+  const el = document.getElementById('copy-' + idx);
+  el.classList.toggle('expanded');
+  btn.textContent = el.classList.contains('expanded') ? 'Voir moins ▴' : 'Voir plus ▾';
+}
+
+// enter key
+document.getElementById('url-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') scrapeAds();
+});
+</script>
+</body>
+</html>
