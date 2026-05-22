@@ -5,6 +5,7 @@ from urllib.parse import urlparse, parse_qs
 
 from flask import Flask, request, jsonify, render_template, Response
 import requests as http_req
+from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
@@ -190,6 +191,8 @@ def parse_cookies(raw: str) -> list:
     data = json.loads(raw)
     if not isinstance(data, list):
         raise ValueError("Les cookies doivent être un tableau JSON")
+
+    SAME_SITE = {'Strict', 'Lax', 'None'}
     result = []
     for c in data:
         if not c.get('name') or c.get('value') is None:
@@ -197,60 +200,111 @@ def parse_cookies(raw: str) -> list:
         domain = c.get('domain', '.facebook.com')
         if not domain.startswith('.') and not domain.startswith('http'):
             domain = '.' + domain
-        result.append({
+        pw = {
             'name':   str(c['name']),
             'value':  str(c['value']),
             'domain': domain,
             'path':   c.get('path', '/'),
-        })
+        }
+        if c.get('httpOnly'):
+            pw['httpOnly'] = True
+        if c.get('secure'):
+            pw['secure'] = True
+        ss = c.get('sameSite', '')
+        if ss in SAME_SITE:
+            pw['sameSite'] = ss
+        result.append(pw)
     return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Lightweight requests-based scraper (no browser — low memory, fast)
+# Playwright scraper — memory-optimised for 512 MB servers
 # ──────────────────────────────────────────────────────────────────────────────
 
-_HEADERS = {
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    ),
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Upgrade-Insecure-Requests': '1',
-}
+_CHROMIUM_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',   # use /tmp instead of /dev/shm
+    '--disable-gpu',
+    '--no-zygote',
+    '--single-process',          # one process instead of many → ~half the RAM
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--mute-audio',
+    '--no-first-run',
+    '--disable-accelerated-2d-canvas',
+    '--disable-webgl',
+    '--disable-software-rasterizer',
+    '--disable-blink-features=AutomationControlled',
+]
 
 
-def scrape_simple(url: str, cookies_raw: str = None) -> list:
+def _run_playwright(url: str, pw_cookies: list) -> list:
     ads: list = []
     seen: set = set()
 
-    session = http_req.Session()
-    session.headers.update(_HEADERS)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=_CHROMIUM_ARGS)
+        ctx = browser.new_context(
+            user_agent=(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            ),
+            locale='en-US',
+            viewport={'width': 1024, 'height': 768},
+        )
+        page = ctx.new_page()
 
-    if cookies_raw:
-        for c in parse_cookies(cookies_raw):
-            session.cookies.set(c['name'], c['value'], domain=c['domain'], path=c['path'])
+        # Block images / video / audio / fonts — not needed for data, saves RAM
+        def _block(route):
+            if route.request.resource_type in ('image', 'media', 'font'):
+                route.abort()
+            else:
+                route.continue_()
 
-    resp = session.get(url, timeout=30, allow_redirects=True)
-    resp.raise_for_status()
+        page.route('**/*', _block)
+        page.add_init_script(
+            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
+        )
 
-    scripts = re.findall(r'<script[^>]*>(.*?)</script>', resp.text, re.DOTALL)
-    extract_from_scripts(scripts, ads, seen)
+        try:
+            if pw_cookies:
+                ctx.add_cookies(pw_cookies)
 
-    print(f'[scrape] found {len(ads)} ads from HTML')
+            # domcontentloaded is faster than networkidle (FB never reaches idle)
+            page.goto(url, wait_until='domcontentloaded', timeout=35000)
+
+            # Poll every second until ad data appears (handles JS challenge + reload)
+            scripts = []
+            for _ in range(25):
+                scripts = page.evaluate(
+                    "Array.from(document.querySelectorAll('script'))"
+                    ".filter(s=>!s.src&&s.textContent.includes('ad_archive_id'))"
+                    ".map(s=>s.textContent)"
+                )
+                if scripts:
+                    break
+                page.wait_for_timeout(1000)
+
+            extract_from_scripts(scripts, ads, seen)
+            print(f'[scrape] found {len(ads)} ads')
+
+        except Exception as e:
+            print(f'[scrape] error: {e}')
+        finally:
+            browser.close()
+
     return ads
 
 
 def scrape(url: str) -> list:
-    return scrape_simple(url)
+    return _run_playwright(url, [])
 
 
 def scrape_with_cookies(url: str, cookies_raw: str) -> list:
-    return scrape_simple(url, cookies_raw)
+    return _run_playwright(url, parse_cookies(cookies_raw))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
