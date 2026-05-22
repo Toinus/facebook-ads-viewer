@@ -3,6 +3,3 @@ services:
     name: facebook-ads-viewer
     runtime: docker
     plan: free
-    envVars:
-      - key: PORT
-        value: 5000
