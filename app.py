@@ -5,7 +5,6 @@ from urllib.parse import urlparse, parse_qs
 
 from flask import Flask, request, jsonify, render_template, Response
 import requests as http_req
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
@@ -191,8 +190,6 @@ def parse_cookies(raw: str) -> list:
     data = json.loads(raw)
     if not isinstance(data, list):
         raise ValueError("Les cookies doivent être un tableau JSON")
-
-    SAME_SITE = {'Strict', 'Lax', 'None'}
     result = []
     for c in data:
         if not c.get('name') or c.get('value') is None:
@@ -200,150 +197,60 @@ def parse_cookies(raw: str) -> list:
         domain = c.get('domain', '.facebook.com')
         if not domain.startswith('.') and not domain.startswith('http'):
             domain = '.' + domain
-        pw = {
+        result.append({
             'name':   str(c['name']),
             'value':  str(c['value']),
             'domain': domain,
             'path':   c.get('path', '/'),
-        }
-        if c.get('httpOnly'):
-            pw['httpOnly'] = True
-        if c.get('secure'):
-            pw['secure'] = True
-        ss = c.get('sameSite', '')
-        if ss in SAME_SITE:
-            pw['sameSite'] = ss
-        result.append(pw)
+        })
     return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Playwright scraper — reads inline scripts + intercepts XHR for pagination
+# Lightweight requests-based scraper (no browser — low memory, fast)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _run_playwright(url: str, pw_cookies: list) -> list:
-    ads: list       = []
-    seen: set       = set()
-    xhr_queue: list = []
-    prev_count      = 0
+_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    ),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Upgrade-Insecure-Requests': '1',
+}
 
-    def flush_xhr():
-        for text in xhr_queue:
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or 'ad_archive_id' not in line:
-                    continue
-                try:
-                    walk(json.loads(line), ads, seen)
-                except json.JSONDecodeError:
-                    pass
-        xhr_queue.clear()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-            ],
-        )
-        ctx = browser.new_context(
-            user_agent=(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            ),
-            locale='en-US',
-            viewport={'width': 1280, 'height': 900},
-        )
-        page = ctx.new_page()
-        page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+def scrape_simple(url: str, cookies_raw: str = None) -> list:
+    ads: list = []
+    seen: set = set()
 
-        # Intercept ALL responses that carry ad data
-        def on_response(resp):
-            if resp.status == 200 and 'fbcdn.net' not in resp.url:
-                try:
-                    text = resp.text()
-                    if text and 'ad_archive_id' in text and len(text) < 8_000_000:
-                        xhr_queue.append(text)
-                except Exception:
-                    pass
+    session = http_req.Session()
+    session.headers.update(_HEADERS)
 
-        page.on('response', on_response)
+    if cookies_raw:
+        for c in parse_cookies(cookies_raw):
+            session.cookies.set(c['name'], c['value'], domain=c['domain'], path=c['path'])
 
-        authenticated = bool(pw_cookies)
+    resp = session.get(url, timeout=30, allow_redirects=True)
+    resp.raise_for_status()
 
-        try:
-            # Inject cookies BEFORE navigating (so FB sees us as logged in)
-            if pw_cookies:
-                ctx.add_cookies(pw_cookies)
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', resp.text, re.DOTALL)
+    extract_from_scripts(scripts, ads, seen)
 
-            page.goto(url, wait_until='networkidle', timeout=60000)
-            page.wait_for_timeout(3000)
-
-            # Dismiss cookie/consent banners
-            for sel in ['[data-cookiebanner="accept_button"]', 'button[title="Accept All"]',
-                        'button[title="Allow all cookies"]', '[aria-label="Allow all cookies"]',
-                        '[aria-label="Accept all"]']:
-                try:
-                    btn = page.query_selector(sel)
-                    if btn:
-                        btn.click()
-                        page.wait_for_timeout(600)
-                        break
-                except Exception:
-                    pass
-
-            # ── Step 1: extract initial SSR scripts ──
-            def read_scripts():
-                return page.evaluate(
-                    "Array.from(document.querySelectorAll('script')).filter(s => !s.src && s.textContent.includes('ad_archive_id')).map(s => s.textContent)"
-                )
-
-            extract_from_scripts(read_scripts(), ads, seen)
-            flush_xhr()
-            print(f'[scrape] initial: {len(ads)} ads | authenticated={authenticated}')
-
-            # ── Step 2: scroll to load more (works properly when authenticated) ──
-            max_scrolls = 60 if authenticated else 4
-            stale       = 0
-            page.mouse.move(640, 450)
-
-            for i in range(max_scrolls):
-                # Slow, human-like scrolling
-                page.mouse.wheel(0, 600)
-                page.wait_for_timeout(1800 if authenticated else 1200)
-
-                flush_xhr()
-                extract_from_scripts(read_scripts(), ads, seen)
-
-                if len(ads) > prev_count:
-                    prev_count = len(ads)
-                    stale = 0
-                    print(f'[scrape] scroll {i+1}: {len(ads)} ads')
-                else:
-                    stale += 1
-                    # For authenticated: wait longer before giving up
-                    if stale >= (6 if authenticated else 3):
-                        break
-
-        except Exception as e:
-            print(f'[scrape] error: {e}')
-        finally:
-            browser.close()
-
-    print(f'[scrape] done: {len(ads)} ads')
+    print(f'[scrape] found {len(ads)} ads from HTML')
     return ads
 
 
 def scrape(url: str) -> list:
-    return _run_playwright(url, [])
+    return scrape_simple(url)
 
 
 def scrape_with_cookies(url: str, cookies_raw: str) -> list:
-    pw_cookies = parse_cookies(cookies_raw)
-    return _run_playwright(url, pw_cookies)
+    return scrape_simple(url, cookies_raw)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
