@@ -5,7 +5,6 @@ from urllib.parse import urlparse, parse_qs
 
 from flask import Flask, request, jsonify, render_template, Response
 import requests as http_req
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
@@ -16,19 +15,16 @@ app = Flask(__name__)
 def parse_node(node: dict) -> dict | None:
     snap = node.get('snapshot') or {}
 
-    # body text (Facebook uses body.text in this API format)
     body = ''
     b = snap.get('body') or {}
     if isinstance(b, dict):
         body = b.get('text') or ''
         if not body:
-            # fallback: markup format
             m = b.get('markup') or {}
             raw = m.get('__html', '') if isinstance(m, dict) else str(m)
             body = re.sub(r'<[^>]+>', ' ', raw).strip()
     elif isinstance(b, str):
         body = re.sub(r'<[^>]+>', ' ', b).strip()
-    # try bodies array
     if not body:
         for bs in snap.get('bodies') or []:
             t = (bs.get('markup') or {}).get('__html', '') or (bs.get('body') or {}).get('text', '')
@@ -36,7 +32,6 @@ def parse_node(node: dict) -> dict | None:
                 body = re.sub(r'<[^>]+>', ' ', t).strip()
                 break
 
-    # images
     images = []
     for img in snap.get('images') or []:
         if isinstance(img, dict):
@@ -47,7 +42,6 @@ def parse_node(node: dict) -> dict | None:
         elif isinstance(img, str) and img.startswith('http'):
             images.append(img)
 
-    # videos
     videos = []
     for vid in snap.get('videos') or []:
         if isinstance(vid, dict):
@@ -58,7 +52,6 @@ def parse_node(node: dict) -> dict | None:
         elif isinstance(vid, str) and vid.startswith('http'):
             videos.append(vid)
 
-    # carousel cards
     cards = []
     for card in snap.get('cards') or []:
         if not isinstance(card, dict):
@@ -81,9 +74,8 @@ def parse_node(node: dict) -> dict | None:
             'videos': cv,
         })
 
-    # dates — at node level (not inside snapshot)
     start_ts = node.get('start_date') or node.get('startDate')
-    end_ts = node.get('end_date') or node.get('endDate')
+    end_ts   = node.get('end_date')   or node.get('endDate')
     start_date = end_date = days_running = None
     if start_ts:
         sd = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
@@ -96,27 +88,19 @@ def parse_node(node: dict) -> dict | None:
         else:
             days_running = (now - sd).days
 
-    # CTA — Facebook provides both cta_text (label) and cta_type (enum)
     cta_label = snap.get('cta_text') or ''
     cta_type  = snap.get('cta_type') or ''
 
-    # identifiers & page info
     ad_id     = str(node.get('ad_archive_id') or node.get('adArchiveID') or '')
     page_name = snap.get('page_name') or node.get('pageName') or ''
     page_id   = str(node.get('page_id') or snap.get('page_id') or node.get('pageID') or '')
-
-    # platforms
     platforms = node.get('publisher_platform') or node.get('publisherPlatform') or []
-
-    # media type hint
-    display_format = snap.get('display_format') or ''
-
-    # extra page info
-    page_like_count   = snap.get('page_like_count')
-    page_categories   = snap.get('page_categories') or []
-    page_profile_url  = snap.get('page_profile_picture_url') or ''
-    page_profile_uri  = snap.get('page_profile_uri') or ''
-    caption           = snap.get('caption') or ''
+    display_format   = snap.get('display_format') or ''
+    page_like_count  = snap.get('page_like_count')
+    page_categories  = snap.get('page_categories') or []
+    page_profile_url = snap.get('page_profile_picture_url') or ''
+    page_profile_uri = snap.get('page_profile_uri') or ''
+    caption          = snap.get('caption') or ''
 
     if not ad_id and not body and not images and not videos:
         return None
@@ -150,7 +134,6 @@ def parse_node(node: dict) -> dict | None:
 
 
 def walk(obj, out: list, seen: set):
-    """Recursively search any JSON structure for ad nodes."""
     if isinstance(obj, dict):
         if 'ad_archive_id' in obj or 'adArchiveID' in obj:
             ad = parse_node(obj)
@@ -165,15 +148,12 @@ def walk(obj, out: list, seen: set):
 
 
 def extract_from_scripts(scripts: list, out: list, seen: set):
-    """Parse JSON from FB inline scripts and walk for ads."""
     for script in scripts:
         if not script or 'ad_archive_id' not in script:
             continue
-        # Facebook scripts are complete JSON objects
         try:
             walk(json.loads(script), out, seen)
         except json.JSONDecodeError:
-            # Some scripts might have a tiny prefix — try stripping to first {
             idx = script.find('{')
             if idx > 0:
                 try:
@@ -187,12 +167,9 @@ def extract_from_scripts(scripts: list, out: list, seen: set):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_cookies(raw: str) -> list:
-    """Accept JSON array from Cookie-Editor / EditThisCookie / etc."""
     data = json.loads(raw)
     if not isinstance(data, list):
         raise ValueError("Les cookies doivent être un tableau JSON")
-
-    SAME_SITE = {'Strict', 'Lax', 'None'}
     result = []
     for c in data:
         if not c.get('name') or c.get('value') is None:
@@ -200,111 +177,78 @@ def parse_cookies(raw: str) -> list:
         domain = c.get('domain', '.facebook.com')
         if not domain.startswith('.') and not domain.startswith('http'):
             domain = '.' + domain
-        pw = {
+        result.append({
             'name':   str(c['name']),
             'value':  str(c['value']),
             'domain': domain,
             'path':   c.get('path', '/'),
-        }
-        if c.get('httpOnly'):
-            pw['httpOnly'] = True
-        if c.get('secure'):
-            pw['secure'] = True
-        ss = c.get('sameSite', '')
-        if ss in SAME_SITE:
-            pw['sameSite'] = ss
-        result.append(pw)
+        })
     return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Playwright scraper — memory-optimised for 512 MB servers
+# Scraper — plain HTTP with automatic JS-challenge bypass (no browser needed)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_CHROMIUM_ARGS = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',   # use /tmp instead of /dev/shm
-    '--disable-gpu',
-    '--no-zygote',
-    '--single-process',          # one process instead of many → ~half the RAM
-    '--disable-extensions',
-    '--disable-background-networking',
-    '--disable-default-apps',
-    '--disable-sync',
-    '--mute-audio',
-    '--no-first-run',
-    '--disable-accelerated-2d-canvas',
-    '--disable-webgl',
-    '--disable-software-rasterizer',
-    '--disable-blink-features=AutomationControlled',
-]
+_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    ),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+}
 
 
-def _run_playwright(url: str, pw_cookies: list) -> list:
+def _fetch_page(url: str, session: http_req.Session) -> str:
+    resp = session.get(url, timeout=20, allow_redirects=True)
+
+    # Facebook returns 403 + a tiny JS challenge page for non-browsers.
+    # We replicate what the JS does: POST to the verify URL, then reload.
+    if resp.status_code == 403 or 'executeChallenge' in resp.text:
+        m = re.search(r"fetch\('(/__rd_verify_[^']+)'", resp.text)
+        if m:
+            verify_url = 'https://www.facebook.com' + m.group(1)
+            session.post(verify_url, headers={
+                'Origin': 'https://www.facebook.com',
+                'Referer': url,
+                'Content-Length': '0',
+            }, timeout=10)
+            resp = session.get(url, timeout=20, allow_redirects=True)
+
+    resp.raise_for_status()
+    return resp.text
+
+
+def scrape_simple(url: str, cookies_raw: str = None) -> list:
     ads: list = []
     seen: set = set()
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=_CHROMIUM_ARGS)
-        ctx = browser.new_context(
-            user_agent=(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            ),
-            locale='en-US',
-            viewport={'width': 1024, 'height': 768},
-        )
-        page = ctx.new_page()
+    session = http_req.Session()
+    session.headers.update(_HEADERS)
 
-        # Block images / video / audio / fonts — not needed for data, saves RAM
-        def _block(route):
-            if route.request.resource_type in ('image', 'media', 'font'):
-                route.abort()
-            else:
-                route.continue_()
+    if cookies_raw:
+        for c in parse_cookies(cookies_raw):
+            session.cookies.set(c['name'], c['value'],
+                                domain=c['domain'], path=c['path'])
 
-        page.route('**/*', _block)
-        page.add_init_script(
-            "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})"
-        )
+    html = _fetch_page(url, session)
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
+    extract_from_scripts(scripts, ads, seen)
 
-        try:
-            if pw_cookies:
-                ctx.add_cookies(pw_cookies)
-
-            # domcontentloaded is faster than networkidle (FB never reaches idle)
-            page.goto(url, wait_until='domcontentloaded', timeout=35000)
-
-            # Poll every second until ad data appears (handles JS challenge + reload)
-            scripts = []
-            for _ in range(25):
-                scripts = page.evaluate(
-                    "Array.from(document.querySelectorAll('script'))"
-                    ".filter(s=>!s.src&&s.textContent.includes('ad_archive_id'))"
-                    ".map(s=>s.textContent)"
-                )
-                if scripts:
-                    break
-                page.wait_for_timeout(1000)
-
-            extract_from_scripts(scripts, ads, seen)
-            print(f'[scrape] found {len(ads)} ads')
-
-        except Exception as e:
-            print(f'[scrape] error: {e}')
-        finally:
-            browser.close()
-
+    print(f'[scrape] found {len(ads)} ads')
     return ads
 
 
 def scrape(url: str) -> list:
-    return _run_playwright(url, [])
+    return scrape_simple(url)
 
 
 def scrape_with_cookies(url: str, cookies_raw: str) -> list:
-    return _run_playwright(url, parse_cookies(cookies_raw))
+    return scrape_simple(url, cookies_raw)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -347,8 +291,8 @@ def parse_api_node(ad: dict) -> dict:
 
     impressions = ad.get('impressions') or {}
     spend       = ad.get('spend') or {}
-    imp_str  = (f"{impressions.get('lower_bound','?')} – {impressions.get('upper_bound','?')}"
-                if impressions else '')
+    imp_str   = (f"{impressions.get('lower_bound','?')} – {impressions.get('upper_bound','?')}"
+                 if impressions else '')
     spend_str = (f"{spend.get('lower_bound','?')} – {spend.get('upper_bound','?')} {ad.get('currency','')}"
                  if spend else '')
 
@@ -385,15 +329,14 @@ def parse_api_node(ad: dict) -> dict:
 
 
 def fetch_all_via_api(page_id: str, country: str, active_status: str, token: str) -> list:
-    """Call the official Facebook Ad Library API and paginate through all results."""
     ads = []
     params = {
-        'access_token':      token,
+        'access_token':         token,
         'ad_reached_countries': country,
-        'search_page_ids':   page_id,
-        'ad_active_status':  active_status,
-        'fields':            _API_FIELDS,
-        'limit':             100,
+        'search_page_ids':      page_id,
+        'ad_active_status':     active_status,
+        'fields':               _API_FIELDS,
+        'limit':                100,
     }
     api_url = 'https://graph.facebook.com/v21.0/ads_archive'
 
@@ -402,7 +345,7 @@ def fetch_all_via_api(page_id: str, country: str, active_status: str, token: str
         data = r.json()
 
         if 'error' in data:
-            msg = data['error'].get('message', 'Erreur API Facebook')
+            msg  = data['error'].get('message', 'Erreur API Facebook')
             code = data['error'].get('code', '')
             raise Exception(f"Erreur API ({code}): {msg}")
 
@@ -455,14 +398,14 @@ def api_scrape_cookies():
         ads = scrape_with_cookies(url, cookies_raw)
         return jsonify({'ads': ads, 'count': len(ads), 'source': 'cookies'})
     except json.JSONDecodeError:
-        return jsonify({'error': 'Format de cookies invalide. Assure-toi d\'exporter en JSON depuis Cookie-Editor.'}), 400
+        return jsonify({'error': 'Format de cookies invalide. Exporte en JSON depuis Cookie-Editor.'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/scrape-official', methods=['POST'])
 def api_scrape_official():
-    body = request.get_json(force=True) or {}
+    body  = request.get_json(force=True) or {}
     url   = body.get('url', '').strip()
     token = body.get('token', '').strip()
 
@@ -471,7 +414,6 @@ def api_scrape_official():
     if not url or 'facebook.com/ads/library' not in url:
         return jsonify({'error': 'Lien Facebook Ad Library invalide'}), 400
 
-    # Parse params from URL
     parsed = urlparse(url)
     qs     = parse_qs(parsed.query)
     page_id = (qs.get('view_all_page_id') or [None])[0]
@@ -481,8 +423,8 @@ def api_scrape_official():
 
     if not page_id:
         return jsonify({
-            'error': 'Impossible de trouver le Page ID dans l\'URL. '
-                     'Assure-toi que l\'URL contient view_all_page_id=...'
+            'error': "Impossible de trouver le Page ID dans l'URL. "
+                     "Assure-toi que l'URL contient view_all_page_id=..."
         }), 400
 
     try:
