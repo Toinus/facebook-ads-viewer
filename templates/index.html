@@ -477,8 +477,8 @@ function setLoading(on, fullMode) {
   if (on) {
     const msgs = {
       api:      ['Appel à l\'API Facebook…',       'L\'API officielle charge <strong>toutes</strong> les ads ⚡'],
-      cookies:  ['Analyse en cours…',              'Connexion avec tes cookies — ~3 secondes ⚡'],
-      scraping: ['Analyse en cours…',              'Récupération rapide sans navigateur — ~3 secondes ⚡'],
+      cookies:  ['Analyse en cours…',  'Connexion avec tes cookies Facebook… ⚡'],
+      scraping: ['Analyse en cours…',  'Récupération en cours… ⚡'],
     };
     const [title, sub] = msgs[currentMode] || msgs.scraping;
     el.querySelector('p.fw-semibold').textContent = title;
