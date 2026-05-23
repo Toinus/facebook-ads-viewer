@@ -525,7 +525,14 @@ function renderAds(ads, fullMode, mode) {
     note.innerHTML = '<i class="bi bi-info-circle me-1"></i>~30 ads max en mode scraping. Passe en mode <strong>Cookies</strong> pour tout voir.';
   }
 
-  container.innerHTML = ads.map((ad, i) => adCard(ad, i)).join('');
+  let html = '';
+  for (let i = 0; i < ads.length; i++) {
+    try { html += adCard(ads[i], i); }
+    catch(e) { console.error('Ad render error', i, e); }
+  }
+  container.innerHTML = html;
+  // Scroll so the first card is visible
+  document.getElementById('results-header').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 function adCard(ad, idx) {
@@ -626,8 +633,9 @@ function buildMedia(ad, idx) {
   let badge = '';
 
   if (hasVid) {
-    inner = `<video controls preload="metadata" style="width:100%;max-height:260px;background:#000">
-               <source src="${esc(ad.videos[0])}">
+    inner = `<video controls preload="metadata" style="width:100%;max-height:260px;background:#111;display:block">
+               <source src="${esc(ad.videos[0])}" type="video/mp4">
+               Votre navigateur ne supporte pas la vidéo.
              </video>`;
     badge = '<span class="media-type-badge"><i class="bi bi-play-fill"></i> Vidéo</span>';
   } else {
