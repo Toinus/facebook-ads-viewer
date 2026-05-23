@@ -1,5 +1,7 @@
 import json
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
@@ -202,43 +204,76 @@ _HEADERS = {
     'Sec-Fetch-Site': 'none',
 }
 
+# Session cache — keeps the rd_challenge cookie alive across requests so we
+# don't need to solve a new JS challenge every time (Facebook rate-limits that).
+_session_lock     = threading.Lock()
+_cached_session:  http_req.Session | None = None
+_cached_session_t = 0.0
+_SESSION_TTL      = 1800  # 30 min
 
-def _fetch_page(url: str, session: http_req.Session) -> str:
+
+def _make_session() -> http_req.Session:
+    s = http_req.Session()
+    s.headers.update(_HEADERS)
+    return s
+
+
+def _solve_challenge(session: http_req.Session, url: str, html: str) -> str:
+    """POST to Facebook's JS verify endpoint then reload the page."""
+    m = re.search(r"fetch\('(/__rd_verify_[^']+)'", html)
+    if not m:
+        return html
+    verify_url = 'https://www.facebook.com' + m.group(1)
+    session.post(verify_url, headers={
+        'Origin': 'https://www.facebook.com',
+        'Referer': url,
+        'Content-Length': '0',
+    }, timeout=10)
     resp = session.get(url, timeout=20, allow_redirects=True)
-
-    # Facebook returns 403 + a tiny JS challenge page for non-browsers.
-    # We replicate what the JS does: POST to the verify URL, then reload.
-    if resp.status_code == 403 or 'executeChallenge' in resp.text:
-        m = re.search(r"fetch\('(/__rd_verify_[^']+)'", resp.text)
-        if m:
-            verify_url = 'https://www.facebook.com' + m.group(1)
-            session.post(verify_url, headers={
-                'Origin': 'https://www.facebook.com',
-                'Referer': url,
-                'Content-Length': '0',
-            }, timeout=10)
-            resp = session.get(url, timeout=20, allow_redirects=True)
-
     resp.raise_for_status()
     return resp.text
 
 
+def _fetch_page(url: str, session: http_req.Session) -> str:
+    resp = session.get(url, timeout=20, allow_redirects=True)
+    if resp.status_code == 403 or 'executeChallenge' in resp.text:
+        return _solve_challenge(session, url, resp.text)
+    if resp.status_code >= 400:
+        resp.raise_for_status()
+    return resp.text
+
+
 def scrape_simple(url: str, cookies_raw: str = None) -> list:
+    global _cached_session, _cached_session_t
     ads: list = []
     seen: set = set()
 
-    session = http_req.Session()
-    session.headers.update(_HEADERS)
-
     if cookies_raw:
+        # Authenticated mode: fresh session with user cookies (don't cache)
+        session = _make_session()
         for c in parse_cookies(cookies_raw):
             session.cookies.set(c['name'], c['value'],
                                 domain=c['domain'], path=c['path'])
+    else:
+        # Unauthenticated: reuse cached session so we keep the rd_challenge cookie
+        with _session_lock:
+            if _cached_session is None or time.time() - _cached_session_t > _SESSION_TTL:
+                _cached_session  = _make_session()
+                _cached_session_t = time.time()
+            session = _cached_session
 
-    html = _fetch_page(url, session)
+    try:
+        html = _fetch_page(url, session)
+    except Exception:
+        # Session may have expired — rebuild and retry once
+        with _session_lock:
+            _cached_session  = _make_session()
+            _cached_session_t = time.time()
+            session = _cached_session
+        html = _fetch_page(url, session)
+
     scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL)
     extract_from_scripts(scripts, ads, seen)
-
     print(f'[scrape] found {len(ads)} ads')
     return ads
 
