@@ -371,8 +371,8 @@ document.getElementById('url').addEventListener('keydown', e => { if (e.key==='E
 if __name__ == "__main__":
     print("=" * 55)
     print("  Facebook Ads Viewer — site local")
-    print("  Ouvre  http://localhost:5000  dans ton navigateur")
+    print("  Ouvre  http://localhost:8080  dans ton navigateur")
     print("  Ctrl+C pour arrêter")
     print("=" * 55)
-    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8080")).start()
+    app.run(host="127.0.0.1", port=8080, debug=False)
