@@ -369,6 +369,15 @@ document.getElementById('url').addEventListener('keydown', e => { if (e.key==='E
 # ── Démarrage ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import os, stat
+    script = os.path.abspath(__file__)
+    launcher = os.path.join(os.path.expanduser("~"), "Desktop", "Lancer Facebook Ads.command")
+    if not os.path.exists(launcher):
+        with open(launcher, "w") as lf:
+            lf.write(f'#!/bin/bash\npython3 "{script}"\n')
+        os.chmod(launcher, os.stat(launcher).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        print("✅  Raccourci créé sur le Bureau : 'Lancer Facebook Ads.command'")
+        print("    La prochaine fois, double-clique dessus !")
     print("=" * 55)
     print("  Facebook Ads Viewer — site local")
     print("  Ouvre  http://localhost:8080  dans ton navigateur")
